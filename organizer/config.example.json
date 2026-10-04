@@ -1,0 +1,51 @@
+{
+  "ai": {
+    "provider": "ollama",
+    "ollama": {
+      "base_url": "http://localhost:11434",
+      "model": "qwen2.5:7b"
+    },
+    "openai": {
+      "base_url": "https://api.deepseek.com",
+      "api_key": "sk-你的key",
+      "model": "deepseek-chat"
+    }
+  },
+  "categories": [
+    {
+      "name": "财务报销",
+      "folder": "财务",
+      "keywords": ["发票", "报销", "账单", "发票号码", "金额"]
+    },
+    {
+      "name": "合同协议",
+      "folder": "合同",
+      "keywords": ["合同", "协议", "甲方", "乙方", "签署"]
+    },
+    {
+      "name": "简历人事",
+      "folder": "人事",
+      "keywords": ["简历", "求职", "面试", "学历", "期望薪资"]
+    },
+    {
+      "name": "会议纪要",
+      "folder": "会议",
+      "keywords": ["会议纪要", "参会人", "议题", "决议", "行动项"]
+    }
+  ],
+  "project_hints": [
+    {
+      "name": "项目A",
+      "folder": "项目A",
+      "keywords": ["客户X", "项目A", "甲方公司"]
+    },
+    {
+      "name": "项目B",
+      "folder": "项目B",
+      "keywords": ["供应商Y", "项目B"]
+    }
+  ],
+  "default_folder": "未分类",
+  "action": "copy",
+  "recursive": true
+}

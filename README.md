@@ -8,6 +8,7 @@
 |---|---|---|
 | 文件批量改名/整理器 | [`renamer/`](renamer/) | 批量重命名、按扩展名归档、正则替换、序号命名 |
 | 重复文件查找器 | [`dedup/`](dedup/) | 按内容/文件名找重复文件，安全清理释放空间 |
+| 智能文件归类助手 | [`organizer/`](organizer/) | 按内容归类 + 语义检索，可接自己的 AI |
 
 ## 快速开始
 
@@ -19,6 +20,12 @@ python3 renamer/batchrenamer.py --dir ~/Pictures --ext .jpg --prefix 旅行_ --d
 
 # 找重复文件
 python3 dedup/dedup.py --dir ~/Downloads --by-content --recursive
+
+# 按内容归类（先预览）
+python3 organizer/smartfile.py organize --dir ~/Documents --config organizer/config.example.json --dry-run
+
+# 检索相关文件
+python3 organizer/smartfile.py search --dir ~/Documents --query "报销"
 ```
 
 详细用法见各工具目录下的 README。
