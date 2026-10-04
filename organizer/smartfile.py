@@ -210,8 +210,76 @@ def save_index(idx, directory):
     # 索引里不存完整正文，只存提取的摘要文本（受限长度）
     slim = [{"path": i["path"], "name": i["name"], "ext": i["ext"],
              "size": i["size"], "text": i["text"][:3000]} for i in idx]
-    idx_path.write_text(json.dumps(slim, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 同时构建倒排索引 + BM25 统计量，一并写入
+    inv_index, doc_stats = build_inverted_index(idx)
+    data = {"docs": slim, "inverted": inv_index, "doc_stats": doc_stats}
+    idx_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return idx_path
+
+
+# --- 倒排索引 + BM25 -----------------------------------------------------
+
+import math
+
+
+def tokenize(text):
+    """中文/英文混合分词：中文按单字+双字组合，英文按词；统一小写"""
+    text = text.lower()
+    tokens = []
+    # 英文/数字词
+    for w in re.findall(r"[a-z0-9_]+", text):
+        tokens.append(w)
+    # 中文：连续汉字串，产出单字和双字（bigram）组合，兼顾查询词
+    for seg in re.findall(r"[\u4e00-\u9fff]+", text):
+        chars = list(seg)
+        tokens.extend(chars)  # 单字
+        tokens.extend(seg[i:i + 2] for i in range(len(chars) - 1))  # 双字
+    return tokens
+
+
+def build_inverted_index(idx):
+    """构建倒排索引：{词: {doc_id: 词频}}，以及每篇文档的统计量"""
+    inverted = {}   # term -> {doc_id: tf}
+    doc_stats = {}  # doc_id -> {"len": 总词数, "path": ..., "name": ...}
+    for did, f in enumerate(idx):
+        tokens = tokenize(f["text"] + " " + f["name"])
+        tf = {}
+        for t in tokens:
+            tf[t] = tf.get(t, 0) + 1
+            inverted.setdefault(t, {}).setdefault(did, 0)
+            inverted[t][did] += 1
+        doc_stats[did] = {"len": len(tokens)}
+    return inverted, doc_stats
+
+
+def bm25_score(query_terms, inverted, doc_stats, N, k1=1.5, b=0.75):
+    """BM25 相关性打分：对查询的每个词累加
+    score = Σ IDF(t) * [ tf*(k1+1) / (tf + k1*(1-b+b*dl/avgdl)) ]
+    """
+    avgdl = sum(s["len"] for s in doc_stats.values()) / max(N, 1)
+    scores = {}  # doc_id -> score
+    for t in query_terms:
+        postings = inverted.get(t)
+        if not postings:
+            continue
+        df = len(postings)
+        idf = math.log(1 + (N - df + 0.5) / (df + 0.5))
+        for did, tf in postings.items():
+            dl = doc_stats[did]["len"]
+            denom = tf + k1 * (1 - b + b * dl / avgdl)
+            scores[did] = scores.get(did, 0.0) + idf * (tf * (k1 + 1)) / denom
+    return scores
+
+
+def load_index_file(directory):
+    """加载已存索引文件（不存在或无效则返回 None）"""
+    idx_path = Path(directory) / ".smartfile_index.json"
+    if not idx_path.exists():
+        return None
+    try:
+        return json.loads(idx_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 # --- 子命令 -------------------------------------------------------------
@@ -286,14 +354,37 @@ def cmd_search(args):
         cfg = load_config(args.config)
         ai = AI(cfg.get("ai"))
 
-    idx = build_index(args.dir, True)
     query = args.query
     print(f"\n检索「{query}」：\n")
 
-    # 查询拆成多个词（按空白分隔），任一命中即相关
     terms = [t for t in re.split(r"[\s,，、。|]+", query) if t]
 
-    # 1. 关键词命中
+    # 优先加载预建索引（倒排 + BM25）
+    data = load_index_file(args.dir)
+    if data and data.get("inverted"):
+        docs = data["docs"]
+        inverted = data["inverted"]
+        doc_stats = data["doc_stats"]
+        N = len(docs)
+        # 查询词也要按同样规则 tokenize（中文拆字/双字）
+        q_terms = []
+        for t in terms:
+            q_terms.extend(tokenize(t))
+        scores = bm25_score(q_terms, inverted, doc_stats, N)
+        # 按分数降序取前 20
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:20]
+        if not ranked:
+            print("未找到相关文件。")
+            return
+        for did, score in ranked:
+            d = docs[int(did)]
+            print(f"  - {d['name']}  ({d['ext']}，{format_size(d['size'])}，相关度 {score:.2f})")
+            print(f"      {d['path']}")
+        print(f"\n共 {len(scores)} 个相关文件。")
+        return
+
+    # 无索引时退化到线性扫描 + 去重
+    idx = build_index(args.dir, True)
     seen = set()
     kw_matches = []
     for f in idx:
@@ -305,11 +396,8 @@ def cmd_search(args):
             seen.add(key)
             kw_matches.append(f)
 
-    # 2. AI 语义检索（无关键词命中时）
-    results = []
-    if kw_matches:
-        results = kw_matches
-    else:
+    results = kw_matches
+    if not results:
         candidates = idx[:20]
         for f in candidates:
             if not f["text"].strip():
