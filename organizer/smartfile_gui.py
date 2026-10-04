@@ -1,32 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-smartfile_gui.py —— 智能文件归类助手（图形界面版）
+smartfile_gui.py —— 智能文件归类助手（PySide6 现代界面版）
 
-双击 `.app` 或 `python3 smartfile_gui.py` 启动窗口。
+依赖：PySide6（pip install PySide6）
+
+启动：python3 smartfile_gui.py  或双击 .app
 
 功能：
-  - 选一个文件夹 → 自动扫描其中的文件
-  - 一眼预览「每个文件会被归到哪个文件夹」（规则 / AI / 默认）
-  - 一键「生成示例配置」自定义分类规则，或加载你自己的 config.json
-  - 一键「开始归类」（默认 copy 保留原件，可切换为 move）
-  - 搜索框：倒排索引 + BM25 相关度排序，海量文件毫秒级
-
-复用 smartfile.py 的核心逻辑。GUI 用 macOS 自带 tkinter，零第三方依赖。
+  - 选文件夹 → 扫描文件
+  - 预览每个文件会归到哪个文件夹（规则/AI/默认，颜色标记）
+  - 一键生成示例分类规则 / 加载自定义 config.json
+  - 开始归类（复制/移动）
+  - 搜索：倒排索引 + BM25 相关度排序
+  - 深色/浅色主题切换
 """
 
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
 import sys
-import json
 import os
+import json
 import shutil
+import subprocess
 from pathlib import Path
+
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QLineEdit, QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QMessageBox, QRadioButton, QButtonGroup,
+    QFrame, QSizePolicy, QSpacerItem, QComboBox,
+)
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QFont, QColor, QIcon, QBrush
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smartfile import (
-    build_index, rule_match, load_config, AI, format_size,
-    load_index_file,
+    build_index, rule_match, load_config, AI, load_index_file,
 )
 
 EXAMPLE_CONFIG = {
@@ -38,145 +46,260 @@ EXAMPLE_CONFIG = {
     ],
     "default_folder": "未分类",
     "action": "copy",
-    # "ai": {"provider": "ollama", "base_url": "http://localhost:11434", "model": "qwen2.5:7b"},
+}
+
+# ---- 主题配色 ---------------------------------------------------------
+
+DARK = {
+    "bg": "#121417", "panel": "#1c2026", "panel2": "#242a33", "card": "#1c2026",
+    "text": "#e6e8eb", "sub": "#8a93a1", "border": "#2e3540",
+    "accent": "#4f8cff", "accent_hover": "#6ba2ff", "green": "#34d399",
+    "purple": "#a78bfa", "gray": "#7a8494", "input_bg": "#242a33",
+    "table_alt": "#20262e",
+}
+LIGHT = {
+    "bg": "#f5f6f8", "panel": "#ffffff", "panel2": "#f0f2f5", "card": "#ffffff",
+    "text": "#1f2430", "sub": "#6b7280", "border": "#e5e7eb",
+    "accent": "#2563eb", "accent_hover": "#3b82f6", "green": "#059669",
+    "purple": "#7c3aed", "gray": "#9ca3af", "input_bg": "#ffffff",
+    "table_alt": "#f8fafc",
 }
 
 
-class App(tk.Tk):
+class SmartFileApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.title("智能文件归类助手")
-        self.geometry("960x680")
-        self.minsize(800, 560)
+        self.setWindowTitle("智能文件归类助手")
+        self.resize(1000, 700)
+        self.setMinimumSize(820, 560)
 
-        self.dir_var = tk.StringVar(value=str(Path.home()))
-        self.config_var = tk.StringVar(value="")
-        self.search_var = tk.StringVar()
-        self.action_var = tk.StringVar(value="copy")
-        self.cfg = None
+        self.cfg = {"categories": [], "project_hints": []}
         self.ai = None
         self.idx = []
+        self.dark = True
 
+        self._theme = DARK
         self._build_ui()
+        self._apply_theme()
 
-    # ---------- UI ----------
+    # ---------- 主题 ----------
+    def _apply_theme(self):
+        t = self._theme
+        self.setStyleSheet(f"""
+            QMainWindow, QWidget#central {{ background: {t['bg']}; }}
+            QWidget {{ color: {t['text']};
+                       font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; }}
+            QLabel {{ background: transparent; color: {t['text']}; }}
+            QFrame#card {{ background: {t['card']}; border: 1px solid {t['border']};
+                     border-radius: 12px; }}
+            QLabel#title {{ font-size: 20px; font-weight: 700; color: {t['text']}; }}
+            QLabel#subtitle {{ color: {t['sub']}; font-size: 12px; }}
+            QLabel[class="fieldlabel"], QLabel#fieldlabel {{ color: {t['sub']}; font-size: 12px; font-weight: 600; }}
+            QLineEdit, QComboBox {{ background: {t['input_bg']}; border: 1px solid {t['border']};
+                     border-radius: 8px; padding: 8px 10px; font-size: 13px;
+                     color: {t['text']}; }}
+            QLineEdit:focus, QComboBox:focus {{ border: 1px solid {t['accent']}; }}
+            QPushButton {{ background: {t['panel2']}; color: {t['text']};
+                     border: 1px solid {t['border']}; border-radius: 8px;
+                     padding: 8px 16px; font-size: 13px; font-weight: 500; }}
+            QPushButton:hover {{ background: {t['border']}; }}
+            QPushButton[class="primary"], QPushButton#primary {{ background: {t['accent']}; color: white; border: none; }}
+            QPushButton[class="primary"]:hover, QPushButton#primary:hover {{ background: {t['accent_hover']}; }}
+            QRadioButton {{ color: {t['text']}; font-size: 13px; spacing: 6px; background: transparent; }}
+            QRadioButton::indicator {{ width: 15px; height: 15px; border-radius: 8px;
+                     border: 1px solid {t['border']}; background: {t['input_bg']}; }}
+            QRadioButton::indicator:checked {{ background: {t['accent']}; border: 1px solid {t['accent']}; }}
+            QTableWidget {{ background: {t['card']}; border: 1px solid {t['border']};
+                     border-radius: 8px; gridline-color: {t['border']};
+                     font-size: 13px; color: {t['text']}; }}
+            QHeaderView::section {{ background: {t['panel2']}; color: {t['sub']};
+                     border: none; padding: 8px; font-size: 12px; font-weight: 600; }}
+            QTableWidget::item {{ padding: 6px; }}
+            QTableWidget::item:selected {{ background: {t['accent']}; color: white; }}
+            QTableCornerButton::section {{ background: {t['panel2']}; border: none; }}
+            QScrollBar:vertical {{ background: transparent; width: 8px; }}
+            QScrollBar::handle:vertical {{ background: {t['border']}; border-radius: 4px; }}
+            QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+        """)
+
+    # ---------- 构建 UI ----------
     def _build_ui(self):
-        # 顶部标题栏
-        head = ttk.Frame(self, padding=(12, 10, 12, 4))
-        head.pack(fill="x")
-        ttk.Label(head, text="📁 智能文件归类助手", font=("", 16, "bold")).pack(side="left")
-        ttk.Label(head, text="按内容自动整理 · 规则 + AI 兜底 · 倒排索引秒搜", foreground="#888").pack(side="right")
+        central = QWidget()
+        central.setObjectName("central")
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(20, 16, 20, 16)
+        root.setSpacing(12)
 
-        # 目录行
-        dir_row = ttk.Frame(self, padding=(12, 8))
-        dir_row.pack(fill="x")
-        ttk.Label(dir_row, text="文件夹：").pack(side="left")
-        ttk.Entry(dir_row, textvariable=self.dir_var).pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(dir_row, text="浏览…", command=self.pick_dir).pack(side="left")
-        ttk.Button(dir_row, text="扫描", command=self.load_files).pack(side="left", padx=(6, 0))
+        # 标题栏
+        head = QHBoxLayout()
+        title_box = QVBoxLayout()
+        title = QLabel("📁 智能文件归类助手")
+        title.setObjectName("title")
+        sub = QLabel("按内容自动整理 · 规则优先 + AI 兜底 · 倒排索引秒搜")
+        sub.setObjectName("subtitle")
+        title_box.addWidget(title)
+        title_box.addWidget(sub)
+        head.addLayout(title_box)
+        head.addStretch()
+        self.theme_btn = QPushButton("🌙 深色")
+        self.theme_btn.setFixedWidth(90)
+        self.theme_btn.clicked.connect(self.toggle_theme)
+        head.addWidget(self.theme_btn)
+        root.addLayout(head)
 
-        # 配置行
-        cfg_row = ttk.Frame(self, padding=(12, 4))
-        cfg_row.pack(fill="x")
-        ttk.Label(cfg_row, text="规则配置：").pack(side="left")
-        ttk.Entry(cfg_row, textvariable=self.config_var).pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(cfg_row, text="选择…", command=self.pick_config).pack(side="left")
-        ttk.Button(cfg_row, text="生成示例", command=self.gen_config).pack(side="left", padx=(6, 0))
-        ttk.Label(cfg_row, text="（可选：无配置则全部归入「未分类」）", foreground="#999").pack(side="right")
+        # 目录卡片
+        dir_card = self._card()
+        dir_lay = dir_card.layout()
+        lbl = QLabel("文件夹")
+        lbl.setObjectName("fieldlabel")
+        dir_lay.addWidget(lbl)
+        self.dir_input = QLineEdit(str(Path.home()))
+        dir_lay.addWidget(self.dir_input, 1)
+        browse = QPushButton("浏览…")
+        browse.clicked.connect(self.pick_dir)
+        dir_lay.addWidget(browse)
+        scan = QPushButton("扫描")
+        scan.setObjectName("primary")
+        scan.clicked.connect(self.load_files)
+        dir_lay.addWidget(scan)
+        root.addWidget(dir_card)
 
-        # 选项行：copy/move
-        opt_row = ttk.Frame(self, padding=(12, 4))
-        opt_row.pack(fill="x")
-        ttk.Label(opt_row, text="处理方式：").pack(side="left")
-        ttk.Radiobutton(opt_row, text="复制（保留原件，安全）", variable=self.action_var, value="copy").pack(side="left", padx=(0, 12))
-        ttk.Radiobutton(opt_row, text="移动（剪切到分类夹）", variable=self.action_var, value="move").pack(side="left")
+        # 配置卡片
+        cfg_card = self._card()
+        cfg_lay = cfg_card.layout()
+        lbl2 = QLabel("规则配置")
+        lbl2.setObjectName("fieldlabel")
+        cfg_lay.addWidget(lbl2)
+        self.cfg_input = QLineEdit()
+        self.cfg_input.setPlaceholderText("留空则全部归入「未分类」；点右侧“生成示例”一键创建")
+        cfg_lay.addWidget(self.cfg_input, 1)
+        sel = QPushButton("选择…")
+        sel.clicked.connect(self.pick_config)
+        cfg_lay.addWidget(sel)
+        gen = QPushButton("生成示例")
+        gen.clicked.connect(self.gen_config)
+        cfg_lay.addWidget(gen)
 
-        # 表格
-        table = ttk.Frame(self, padding=(12, 8))
-        table.pack(fill="both", expand=True)
-        cols = ("file", "dest", "method")
-        self.tree = ttk.Treeview(table, columns=cols, show="headings", height=16)
-        self.tree.heading("file", text="文件")
-        self.tree.heading("dest", text="归类到")
-        self.tree.heading("method", text="方式")
-        self.tree.column("file", width=420, anchor="w")
-        self.tree.column("dest", width=220, anchor="w")
-        self.tree.column("method", width=80, anchor="center")
-        self.tree.tag_configure("ok", foreground="#1a7f37")
-        self.tree.tag_configure("def", foreground="#999")
-        self.tree.tag_configure("ai", foreground="#8250df")
-        vsb = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=vsb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        vsb.pack(side="right", fill="y")
-        self.tree.bind("<Double-1>", self._open_file)
+        # 方式单选
+        self.mode_copy = QRadioButton("复制（保留原件）")
+        self.mode_move = QRadioButton("移动（剪切）")
+        self.mode_copy.setChecked(True)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.addButton(self.mode_copy)
+        self.mode_group.addButton(self.mode_move)
+        mode_box = QHBoxLayout()
+        mode_box.addWidget(QLabel("处理方式："))
+        mode_box.addWidget(self.mode_copy)
+        mode_box.addWidget(self.mode_move)
+        mode_box.addStretch()
+        cfg_lay.addLayout(mode_box)
+        root.addWidget(cfg_card)
 
-        # 操作行
-        act_row = ttk.Frame(self, padding=(12, 6))
-        act_row.pack(fill="x")
-        ttk.Button(act_row, text="预览归类", command=self.preview).pack(side="left")
-        self.go_btn = ttk.Button(act_row, text="开始归类", command=self.organize)
-        self.go_btn.pack(side="left", padx=(8, 0))
-        ttk.Label(act_row, text="搜索：").pack(side="left", padx=(24, 0))
-        ttk.Entry(act_row, textvariable=self.search_var).pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(act_row, text="检索", command=self.search).pack(side="left")
+        # 表格卡片
+        table_card = self._card()
+        table_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        table_lay = table_card.layout()
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["文件", "归类到", "方式"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.cellDoubleClicked.connect(self._open_file)
+        table_lay.addWidget(self.table)
+        root.addWidget(table_card, 1)
+
+        # 操作 + 搜索行
+        act = QHBoxLayout()
+        self.preview_btn = QPushButton("预览归类")
+        self.preview_btn.clicked.connect(self.preview)
+        act.addWidget(self.preview_btn)
+        self.go_btn = QPushButton("开始归类")
+        self.go_btn.setObjectName("primary")
+        self.go_btn.clicked.connect(self.organize)
+        act.addWidget(self.go_btn)
+        act.addSpacing(20)
+        act.addWidget(QLabel("搜索："))
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("输入关键词，支持多词空格分隔")
+        self.search_input.returnPressed.connect(self.search)
+        act.addWidget(self.search_input, 1)
+        self.search_btn = QPushButton("检索")
+        self.search_btn.clicked.connect(self.search)
+        act.addWidget(self.search_btn)
+        root.addLayout(act)
 
         # 状态栏
-        self.status = ttk.Label(self, text="就绪 — 选一个文件夹后点「扫描」", foreground="#666", padding=(12, 6))
-        self.status.pack(fill="x", side="bottom")
+        self.status = QLabel("就绪 — 选一个文件夹后点「扫描」")
+        self.status.setObjectName("subtitle")
+        root.addWidget(self.status)
+
+    def _card(self):
+        f = QFrame()
+        f.setObjectName("card")
+        lay = QHBoxLayout(f)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(10)
+        return f
 
     # ---------- 交互 ----------
+    def toggle_theme(self):
+        self.dark = not self.dark
+        self._theme = DARK if self.dark else LIGHT
+        self.theme_btn.setText("🌙 深色" if self.dark else "☀️ 浅色")
+        self._apply_theme()
+
     def pick_dir(self):
-        d = filedialog.askdirectory()
+        d = QFileDialog.getExistingDirectory(self, "选择文件夹", str(Path.home()))
         if d:
-            self.dir_var.set(d)
+            self.dir_input.setText(d)
 
     def pick_config(self):
-        f = filedialog.askopenfilename(filetypes=[("JSON", "*.json"), ("所有文件", "*.*")])
+        f, _ = QFileDialog.getOpenFileName(self, "选择配置文件", "", "JSON (*.json)")
         if f:
-            self.config_var.set(f)
+            self.cfg_input.setText(f)
             self.load_files()
 
     def gen_config(self):
-        d = self.dir_var.get() or str(Path.home())
+        d = self.dir_input.text().strip() or str(Path.home())
         target = str(Path(d) / "config.json")
         if os.path.exists(target):
-            if not messagebox.askyesno("覆盖?", f"{target}\n已存在，覆盖为示例配置？"):
+            if not self._confirm(f"{target}\n已存在，覆盖为示例配置？"):
                 return
         with open(target, "w", encoding="utf-8") as f:
             json.dump(EXAMPLE_CONFIG, f, ensure_ascii=False, indent=2)
-        self.config_var.set(target)
+        self.cfg_input.setText(target)
         self.load_files()
-        self.set_status(f"已生成示例配置：{target}", "#2a6")
-
-    def set_status(self, text, color="#666"):
-        self.status.config(text=text, foreground=color)
+        self._status(f"已生成示例配置：{target}", "green")
 
     def load_files(self):
-        d = self.dir_var.get().strip()
+        d = self.dir_input.text().strip()
         if not os.path.isdir(d):
-            messagebox.showerror("错误", f"文件夹不存在：\n{d}")
+            self._warn(f"文件夹不存在：\n{d}")
             return
-        cfg_path = self.config_var.get().strip()
+        cfg_path = self.cfg_input.text().strip()
         self.cfg = load_config(cfg_path) if cfg_path else {"categories": [], "project_hints": []}
         self.ai = AI(self.cfg.get("ai"))
         self.idx = build_index(d, True)
         self._fill_table(self.idx)
-        self.set_status(f"已扫描 {len(self.idx)} 个文件（规则 {len(self.cfg.get('categories', []))} 类）", "#2a6")
+        self._status(f"已扫描 {len(self.idx)} 个文件（{len(self.cfg.get('categories', []))} 类规则）", "green")
 
     def _fill_table(self, idx):
-        self.tree.delete(*self.tree.get_children())
-        for f in idx:
-            self.tree.insert("", "end", values=(f["name"], "—", "—"))
+        self.table.setRowCount(0)
+        self.table.setRowCount(len(idx))
+        for r, f in enumerate(idx):
+            self.table.setItem(r, 0, QTableWidgetItem(f["name"]))
 
     def _classify(self, f):
-        """返回 (folder, method)"""
         all_cats = self.cfg.get("categories", []) + self.cfg.get("project_hints", [])
-        text = f["text"]
-        cat = rule_match(text, all_cats)
+        cat = rule_match(f["text"], all_cats)
         method = "规则"
-        if cat is None and text.strip():
-            name = self.ai.classify(text, [c["name"] for c in all_cats])
+        if cat is None and f["text"].strip():
+            name = self.ai.classify(f["text"], [c["name"] for c in all_cats])
             if name:
                 cat = next((c for c in all_cats if c["name"] == name), None)
                 method = "AI"
@@ -184,66 +307,71 @@ class App(tk.Tk):
             return (self.cfg.get("default_folder", "未分类"), "默认")
         return (cat.get("folder", cat["name"]), method)
 
-    def _tag_for(self, method):
-        return {"规则": "ok", "AI": "ai", "默认": "def"}.get(method, ())
+    def _method_color(self, method):
+        return {
+            "规则": self._theme["green"],
+            "AI": self._theme["purple"],
+            "默认": self._theme["gray"],
+        }.get(method, self._theme["text"])
 
     def preview(self):
         if not self.idx:
             self.load_files()
         if not self.idx:
             return
-        self.tree.delete(*self.tree.get_children())
-        for f in self.idx:
+        self.table.setRowCount(0)
+        self.table.setRowCount(len(self.idx))
+        for r, f in enumerate(self.idx):
             folder, method = self._classify(f)
-            self.tree.insert("", "end", values=(f["name"], folder, method), tags=(self._tag_for(method),))
-        self.set_status(f"预览完成：{len(self.idx)} 个文件", "#a60")
+            self.table.setItem(r, 0, QTableWidgetItem(f["name"]))
+            self.table.setItem(r, 1, QTableWidgetItem(folder))
+            m_item = QTableWidgetItem(method)
+            m_item.setForeground(QBrush(QColor(self._method_color(method))))
+            self.table.setItem(r, 2, m_item)
+        self._status(f"预览完成：{len(self.idx)} 个文件", "accent")
 
     def organize(self):
         if not self.idx:
             self.load_files()
         if not self.idx:
             return
-        if not messagebox.askyesno("确认", f"即将按 {self.action_var.get()} 方式归类 {len(self.idx)} 个文件，继续？"):
+        action = "move" if self.mode_move.isChecked() else "copy"
+        if not self._confirm(f"即将按「{('移动' if action=='move' else '复制')}」方式归类 {len(self.idx)} 个文件，继续？"):
             return
-        d = Path(self.dir_var.get())
-        action = self.action_var.get()
+        d = Path(self.dir_input.text().strip())
         done = 0
-        self.tree.delete(*self.tree.get_children())
         for f in self.idx:
-            folder, method = self._classify(f)
-            if folder in ("未分类", "") and action == "move":
-                folder = self.cfg.get("default_folder", "未分类")
+            folder, _ = self._classify(f)
             dest_dir = d / folder
             dest = dest_dir / f["name"]
             if dest == Path(f["path"]):
-                self.tree.insert("", "end", values=(f["name"], "已在原位", method)); continue
+                continue
             dest_dir.mkdir(parents=True, exist_ok=True)
             if dest.exists():
-                self.tree.insert("", "end", values=(f["name"], "已存在(跳过)", method)); continue
+                continue
             try:
                 if action == "move":
                     Path(f["path"]).rename(dest)
                 else:
                     shutil.copy2(f["path"], dest)
-                self.tree.insert("", "end", values=(f["name"], folder, method))
                 done += 1
-            except Exception as e:
-                self.tree.insert("", "end", values=(f["name"], f"失败:{e}", method))
-        self.set_status(f"完成：已归类 {done} 个文件", "#2a6")
-        messagebox.showinfo("完成", f"已按 {action} 方式归类 {done} 个文件。")
+            except Exception:
+                pass
+        self._status(f"完成：已归类 {done} 个文件", "green")
+        QMessageBox.information(self, "完成", f"已按「{('移动' if action=='move' else '复制')}」方式归类 {done} 个文件。")
 
     def search(self):
         if not self.idx:
             self.load_files()
         if not self.idx:
             return
-        q = self.search_var.get().strip()
+        q = self.search_input.text().strip()
         if not q:
-            messagebox.showinfo("提示", "请输入搜索词"); return
+            return
         import re, hashlib
         terms = [t for t in re.split(r"[\s,，、。|]+", q) if t]
-
-        data = load_index_file(self.dir_var.get())
+        data = load_index_file(self.dir_input.text().strip())
+        results = []  # (name, score_or_none, path)
         if data and data.get("inverted"):
             from smartfile import bm25_score, tokenize
             docs = data["docs"]
@@ -251,44 +379,60 @@ class App(tk.Tk):
             for t in terms:
                 q_terms.extend(tokenize(t))
             scores = bm25_score(q_terms, data["inverted"], data["doc_stats"], len(docs))
-            self.tree.delete(*self.tree.get_children())
             ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:50]
             for did, score in ranked:
                 d = docs[int(did)]
-                self.tree.insert("", "end", values=(d["name"], f"相关度 {score:.2f}", d["path"]))
-            self.set_status(f"检索到 {len(scores)} 个相关文件（倒排索引）", "#246" if scores else "#a60")
-            return
+                results.append((d["name"], f"{score:.2f}", d["path"]))
+        else:
+            seen = set()
+            for f in self.idx:
+                blob = f["name"] + "\n" + f["text"]
+                if any(t.lower() in blob.lower() for t in terms):
+                    key = hashlib.md5(f["text"].encode()).hexdigest()[:16]
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    results.append((f["name"], "相关", f["path"]))
+        self.table.setRowCount(0)
+        self.table.setRowCount(len(results))
+        for r, (name, score, path) in enumerate(results):
+            self.table.setItem(r, 0, QTableWidgetItem(name))
+            self.table.setItem(r, 1, QTableWidgetItem(f"相关度 {score}" if score != "相关" else "相关"))
+            self.table.setItem(r, 2, QTableWidgetItem(path if path else ""))
+        self._status(f"检索到 {len(results)} 个相关文件", "green" if results else "accent")
 
-        seen = set(); results = []
-        for f in self.idx:
-            blob = f["name"] + "\n" + f["text"]
-            if any(t.lower() in blob.lower() for t in terms):
-                key = hashlib.md5(f["text"].encode()).hexdigest()[:16]
-                if key in seen: continue
-                seen.add(key); results.append(f)
-        self.tree.delete(*self.tree.get_children())
-        for f in results[:50]:
-            self.tree.insert("", "end", values=(f["name"], "相关", f["path"]))
-        self.set_status(f"检索到 {len(results)} 个相关文件", "#246" if results else "#a60")
+    def _open_file(self, row, col):
+        item = self.table.item(row, 2)
+        if item and item.text() and os.path.exists(item.text()):
+            subprocess.Popen(["open", item.text()])
 
-    def _open_file(self, event):
-        sel = self.tree.selection()
-        if not sel:
-            return
-        vals = self.tree.item(sel[0], "values")
-        if len(vals) >= 3 and vals[2] and vals[2] not in ("—", ""):
-            import subprocess
-            subprocess.Popen(["open", vals[2]])
+    # ---------- 提示 ----------
+    def _confirm(self, text):
+        return QMessageBox.question(self, "确认", text) == QMessageBox.Yes
+
+    def _warn(self, text):
+        QMessageBox.warning(self, "提示", text)
+
+    def _status(self, text, kind="gray"):
+        self.status.setText(text)
+        color = self._theme.get(kind, self._theme["sub"])
+        self.status.setStyleSheet(f"color: {color};")
 
 
-if __name__ == "__main__":
-    app = App()
-    # 支持 --demo 参数：自动加载演示目录并预览（用于截图/演示）
+def main():
+    app = QApplication(sys.argv)
+    w = SmartFileApp()
     if "--demo" in sys.argv:
         demo_dir = "/tmp/mcp_demo"
         if os.path.isdir(demo_dir):
-            app.dir_var.set(demo_dir)
-            app.config_var.set(os.path.join(demo_dir, "config.json"))
-            app.after(300, app.load_files)
-            app.after(600, app.preview)
-    app.mainloop()
+            w.dir_input.setText(demo_dir)
+            w.cfg_input.setText(os.path.join(demo_dir, "config.json"))
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(300, w.load_files)
+            QTimer.singleShot(600, w.preview)
+    w.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

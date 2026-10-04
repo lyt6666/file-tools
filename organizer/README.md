@@ -4,9 +4,14 @@
 
 ## 图形界面（推荐新手）
 
-双击 `.app` 或运行 `python3 smartfile_gui.py` 打开窗口，无需记命令：
+双击 `.app` 或运行 `python3 smartfile_gui.py` 打开窗口，无需记命令。界面基于 **PySide6**（Qt），深色现代风格，支持浅色切换：
 
 ![智能文件归类助手界面](gui-screenshot-crop.png)
+
+**安装依赖**：
+```bash
+pip install PySide6
+```
 
 **GUI 操作流程**：
 1. 点「浏览…」选要整理的文件夹，点「扫描」
