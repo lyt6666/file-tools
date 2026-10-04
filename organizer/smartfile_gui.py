@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smartfile import (
     build_index, extract_text, rule_match, load_config, AI, format_size,
+    load_index_file,
 )
 
 
@@ -199,6 +200,25 @@ class App(tk.Tk):
             messagebox.showinfo("提示", "请输入搜索词"); return
         import re, hashlib
         terms = [t for t in re.split(r"[\s,，、。|]+", q) if t]
+
+        # 优先走倒排索引 + BM25（快）
+        data = load_index_file(self.dir_var.get())
+        if data and data.get("inverted"):
+            from smartfile import bm25_score, tokenize
+            docs = data["docs"]
+            q_terms = []
+            for t in terms:
+                q_terms.extend(tokenize(t))
+            scores = bm25_score(q_terms, data["inverted"], data["doc_stats"], len(docs))
+            self.tree.delete(*self.tree.get_children())
+            ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:50]
+            for did, score in ranked:
+                d = docs[int(did)]
+                self.tree.insert("", "end", values=(d["name"], f"{score:.2f}", ""))
+            self.set_status(f"检索到 {len(scores)} 个相关文件（倒排索引）", "#246" if scores else "#a60")
+            return
+
+        # 无索引时退化线性扫描
         seen = set(); results = []
         for f in self.idx:
             blob = f["name"] + "\n" + f["text"]
