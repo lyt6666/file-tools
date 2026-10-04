@@ -290,19 +290,26 @@ def cmd_search(args):
     query = args.query
     print(f"\n检索「{query}」：\n")
 
+    # 查询拆成多个词（按空白分隔），任一命中即相关
+    terms = [t for t in re.split(r"[\s,，、。|]+", query) if t]
+
     # 1. 关键词命中
+    seen = set()
     kw_matches = []
-    ql = query.lower()
     for f in idx:
-        if ql in f["name"].lower() or ql in f["text"].lower():
+        name_key = f["name"] + "\n" + f["text"]
+        if any(t.lower() in name_key.lower() for t in terms):
+            key = hashlib.md5(f["text"].encode("utf-8")).hexdigest()[:16]
+            if key in seen:
+                continue
+            seen.add(key)
             kw_matches.append(f)
 
-    # 2. AI 语义检索（把候选文本交给 AI 判断相关度）
+    # 2. AI 语义检索（无关键词命中时）
     results = []
     if kw_matches:
         results = kw_matches
     else:
-        # 无关键词命中时，用 AI 对前 N 个文件做语义判断
         candidates = idx[:20]
         for f in candidates:
             if not f["text"].strip():
